@@ -18,14 +18,14 @@ using Flux: update!
 using ParameterSchedulers
 using Optimisers
 
-const resnet_size = 34
-const batchsize = 32
+resnet_size = 34
+batchsize = 128
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
 
 # select device
-CUDA.device!(0)
+# CUDA.device!(0)
 
 #set model input image size
 const im_size_pre = (256, 256)
@@ -41,7 +41,7 @@ setdiff!(imgs, imgs_delete)
 
 Random.seed!(123)
 num_obs = length(imgs)
-num_obs = 1_000
+# num_obs = 1_000
 @info "num_obs" num_obs
 
 # labels mapping
@@ -89,8 +89,11 @@ end
 dtrain = DataLoader(ImageContainer(imgs[idtrain]); batchsize, partial=false, parallel=true, collate=true)
 
 function loop_data_cpu(dtrain)
+    iter = 1
     for (x, y,) in dtrain
-        sum(x)
+        @info "iter" iter
+        # sum(x)
+        iter += 1
     end
 end
 
@@ -108,10 +111,10 @@ end
 
 @info "start cpu loop"
 @time loop_data_cpu(dtrain)
-@time loop_data_cpu(dtrain)
-@info "start gpu loop"
-CUDA.@time loop_data_gpu(dtrain)
-CUDA.@time loop_data_gpu(dtrain)
-@info "start cuiter loop"
-CUDA.@time loop_data_cuiter(dtrain)
-CUDA.@time loop_data_cuiter(dtrain)
+# @time loop_data_cpu(dtrain)
+# @info "start gpu loop"
+# CUDA.@time loop_data_gpu(dtrain)
+# CUDA.@time loop_data_gpu(dtrain)
+# @info "start cuiter loop"
+# CUDA.@time loop_data_cuiter(dtrain)
+# CUDA.@time loop_data_cuiter(dtrain)

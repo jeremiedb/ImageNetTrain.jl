@@ -18,7 +18,7 @@ using Flux: update!
 using ParameterSchedulers
 
 const resnet_size = 34
-const batchsize = 32
+const batchsize = 24
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
@@ -147,7 +147,7 @@ function train_epoch!(m, θ, opt, loss; dtrain)
 end
 
 m_device = gpu
-m = ResNet(50, nclasses=1000) |> m_device;
+m = ResNet(resnet_size, nclasses=1000) |> m_device;
 #@info "loading model"
 #m = BSON.load("results/model-opt-iter-A-22.bson")[:model] |> m_device;
 #@info "loading optmiser"
@@ -157,7 +157,7 @@ m = ResNet(50, nclasses=1000) |> m_device;
 # θ = θ[length(θ)-1:length(θ)];
 
 # opt = Flux.Optimise.Adam(1.0f-3)
-opt = Flux.Optimise.Nesterov(1.0f-2)
+opt = Flux.Optimise.Nesterov(1f-3)
 #opt = Adam(1e-2)
 #s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
 #    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
@@ -176,14 +176,14 @@ function train_loop(epochs)
         @time train_epoch!(m, θ, opt, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
         if i == 1
             opt.eta = 1f-2
         end
-        if i % 20 == 0
+        if i % 16 == 0
             opt.eta /= 10
         end
     end
 end
 
-@time train_loop(1)
+@time train_loop(20)

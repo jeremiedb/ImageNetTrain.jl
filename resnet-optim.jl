@@ -167,9 +167,9 @@ rule = Optimisers.Nesterov(1.0f-2)
 # rule = Optimisers.Adam(1f-3)
 state = Optimisers.setup(rule, m);
 
-#s = ParameterSchedulers.Sequence(3e-4 => 1 * updates_per_epoch, 1e-3 => 1 * updates_per_epoch, 3e-3 => 18 * updates_per_epoch, 
-#    1e-3 => 20 * updates_per_epoch, 3e-4 => 20 * updates_per_epoch, 1e-4 => 20 * updates_per_epoch)
-#opt = ParameterSchedulers.Scheduler(s, ADAM())
+#s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
+#    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
+#opt = ParameterSchedulers.Scheduler(s, Adam())
 
 results_path = "results"
 
@@ -184,16 +184,18 @@ function train_loop(epochs)
         @time train_epoch!(m, state, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info metric
-        BSON.bson(joinpath(results_path, "model-opt-iter-A-$i.bson"), Dict(:model => m, :state => state))
-        if i == 1
-            opt.eta = 1e-2
-        end
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-optim-A-$i.bson"), Dict(:model => m |> cpu, :state => state |> cpu))
+        # if i == 1
+        #     opt.eta = 1e-2
+        # end
         if i % 12 == 0
-            opt.eta /= 4
+            rule = Optimisers.Nesterov(1.0f-3)
+            state = Optimisers.setup(rule, m)
+            # opt.eta /= 4
         end
     end
 end
 
 @info "Start training"
-@time train_epoch!(m, state, loss; dtrain=dtrain)
-# loop_epochs(1)
+# @time train_epoch!(m, state, loss; dtrain=dtrain)
+loop_epochs(16)
