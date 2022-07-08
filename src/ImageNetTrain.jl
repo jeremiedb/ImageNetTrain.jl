@@ -1,0 +1,3 @@
+module ImageNetTrain
+
+end # module
