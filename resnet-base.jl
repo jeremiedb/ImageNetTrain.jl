@@ -80,7 +80,7 @@ function train_path_to_idx(path)
     return idx
 end
 
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size),  Maybe(FlipX()),  Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -147,17 +147,18 @@ function train_epoch!(m, θ, opt, loss; dtrain)
 end
 
 m_device = gpu
-m = ResNet(resnet_size, nclasses=1000) |> m_device;
-#@info "loading model"
-#m = BSON.load("results/model-opt-iter-A-22.bson")[:model] |> m_device;
-#@info "loading optmiser"
-#opt = BSON.load("results/model-opt-iter-A-22.bson")[:opt] |> m_device;
+
+# m = ResNet(resnet_size, nclasses=1000) |> m_device;
+
+@info "loading model"
+m = BSON.load("results/resnet$(resnet_size)-base-Adam-A-18.bson")[:model] |> m_device;
+@info "loading optmiser"
+opt = BSON.load("results/resnet$(resnet_size)-base-Adam-A-18.bson")[:opt] |> m_device;
 
 θ = Flux.params(m);
-# θ = θ[length(θ)-1:length(θ)];
 
-# opt = Flux.Optimise.Adam(1.0f-3)
-opt = Flux.Optimise.Nesterov(1f-3)
+opt = Flux.Optimise.Adam(1f-4)
+# opt = Flux.Optimise.Nesterov(1f-3)
 #opt = Adam(1e-2)
 #s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
 #    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
@@ -171,14 +172,14 @@ function train_loop(epochs)
         @info "opt.eta" opt.eta
         if i == 1
             @time metric = eval_f(m, deval)
-            @info metric
+            @info "eval metric" metric
         end
         @time train_epoch!(m, θ, opt, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
-        @info metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
+        @info "eval metric" metric
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Adam-B-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
         if i == 1
-            opt.eta = 1f-2
+            opt.eta = 5f-4
         end
         if i % 16 == 0
             opt.eta /= 10
