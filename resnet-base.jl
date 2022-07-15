@@ -80,7 +80,7 @@ function train_path_to_idx(path)
     return idx
 end
 
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size),  Maybe(FlipX()),  Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -148,17 +148,15 @@ end
 
 m_device = gpu
 
+@info "loading model / optimizer"
 # m = ResNet(resnet_size, nclasses=1000) |> m_device;
-
-@info "loading model"
-m = BSON.load("results/resnet$(resnet_size)-base-Adam-A-18.bson")[:model] |> m_device;
-@info "loading optmiser"
-opt = BSON.load("results/resnet$(resnet_size)-base-Adam-A-18.bson")[:opt] |> m_device;
+m = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-16.bson")[:model] |> m_device;
+opt = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-16.bson")[:opt] |> m_device;
 
 θ = Flux.params(m);
 
-opt = Flux.Optimise.Adam(1f-4)
-# opt = Flux.Optimise.Nesterov(1f-3)
+# opt = Flux.Optimise.Nesterov(1.0f-3)
+# opt = Flux.Optimise.Adam(1f-4)
 #opt = Adam(1e-2)
 #s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
 #    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
@@ -166,25 +164,59 @@ opt = Flux.Optimise.Adam(1f-4)
 
 results_path = "results"
 
-function train_loop(epochs)
-    for i in 1:epochs
+@time metric = eval_f(m, deval)
+@info "eval metric" metric
+
+function train_loop(iter_start, iter_end)
+    for i in iter_start:iter_end
+        # Some Housekeeping
+        GC.gc(true)
+        CUDA.reclaim()
+
+        if i == 1
+            opt.eta = 1.0f-3
+        elseif i == 2
+            opt.eta = 5.0f-3
+        elseif i == 3
+            opt.eta = 3.0f-2
+            # elseif i == 20
+            #     opt.eta = 1.0f-2
+            # elseif i == 21
+            #     opt.eta = 3.0f-3
+            # elseif i == 22
+            #     opt.eta = 1.0f-3
+        elseif i == 17
+            opt.eta = 3.0f-3
+        end
+
         @info "iter: " i
         @info "opt.eta" opt.eta
-        if i == 1
-            @time metric = eval_f(m, deval)
-            @info "eval metric" metric
-        end
+
         @time train_epoch!(m, θ, opt, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info "eval metric" metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Adam-B-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
-        if i == 1
-            opt.eta = 5f-4
-        end
-        if i % 16 == 0
-            opt.eta /= 10
-        end
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Nesterov-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
     end
 end
 
-@time train_loop(20)
+# @time train_loop(1, 20)
+@time train_loop(17, 32)
+# @time train_loop(25, 36)
+
+function metric_loop(iter_start, iter_end)
+    for i in iter_start:iter_end
+        # Some Housekeeping
+        GC.gc(true)
+        CUDA.reclaim()
+
+        m = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-$i.bson")[:model] |> m_device
+        opt = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-$i.bson")[:opt] |> m_device
+
+        @info "iter: " i
+        @info "opt.eta" opt.eta
+        metric = eval_f(m, deval)
+        @info "eval metric" metric
+    end
+end
+
+# @time metric_loop(1, 20)
