@@ -73,7 +73,7 @@ function train_path_to_idx(path)
     return idx
 end
 
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -82,7 +82,7 @@ function getindex(data::ImageContainer, idx::Int)
     x = apply(tfm_train, Image(x))
     x = permutedims(channelview(RGB.(itemdata(x))), (3, 2, 1))
     x = Float32.(x)
-    return (x, y)
+    return (x, Flux.onehot(y, 1:1000))
 end
 
 # set data loaders
@@ -91,8 +91,8 @@ dtrain = DataLoader(ImageContainer(imgs[idtrain]); batchsize, partial=false, par
 function loop_data_cpu(dtrain)
     iter = 1
     for (x, y,) in dtrain
-        @info "iter" iter
-        # sum(x)
+        # @info "iter" iter
+        sum(x)
         iter += 1
     end
 end
@@ -105,15 +105,15 @@ end
 
 function loop_data_cuiter(dtrain)
     for (iter, (x, y,)) in enumerate(CuIterator(dtrain))
-        sum(x)
+        sum(x), sum(y)
     end
 end
 
 @info "start cpu loop"
-@time loop_data_cpu(dtrain)
 # @time loop_data_cpu(dtrain)
-# @info "start gpu loop"
-# CUDA.@time loop_data_gpu(dtrain)
+# @time loop_data_cpu(dtrain)
+@info "start gpu loop"
+CUDA.@time loop_data_gpu(dtrain)
 # CUDA.@time loop_data_gpu(dtrain)
 # @info "start cuiter loop"
 # CUDA.@time loop_data_cuiter(dtrain)

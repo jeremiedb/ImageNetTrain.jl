@@ -18,7 +18,7 @@ using Flux: update!
 using ParameterSchedulers
 
 const resnet_size = 34
-const batchsize = 24
+const batchsize = 64
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
@@ -30,6 +30,9 @@ CUDA.device!(0)
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
+# unsafe_free OneHotArrays
+# CUDA.unsafe_free!(x::Flux.OneHotArray) = CUDA.unsafe_free!(x.indices)
+
 # list images
 train_img_path = joinpath(@__DIR__, "data/ILSVRC/Data/CLS-LOC/train")
 imgs = vcat([readdir(dir, join=true) for dir in readdir(train_img_path, join=true)]...)
@@ -39,9 +42,10 @@ imgs_delete = joinpath.(train_img_path, first.(rsplit.(imgs_delete, "_", limit=2
 setdiff!(imgs, imgs_delete)
 
 Random.seed!(123)
-num_obs = length(imgs)
-# num_obs = 10_000
-@info "num_obs" num_obs
+nobs = length(imgs)
+@info "nobs" nobs
+updates_per_epoch = Int(floor(nobs / batchsize))
+idtrain = shuffle(1:length(imgs))[1:nobs]
 
 # list val images
 val_img_path = "data/ILSVRC/Data/CLS-LOC/val/"
@@ -63,10 +67,6 @@ for (idx, line) in enumerate(readlines("data/LOC_synset_mapping.txt"))
     push!(idx_to_name, idx => name)
 end
 
-# train eval split
-updates_per_epoch = Int(floor(num_obs / batchsize))
-idtrain = shuffle(1:length(imgs))[1:num_obs]
-
 # train image container
 struct ImageContainer{T<:Vector}
     img::T
@@ -80,7 +80,8 @@ function train_path_to_idx(path)
     return idx
 end
 
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -137,70 +138,77 @@ function eval_f(m, data)
     return acc
 end
 
+# function train_epoch!(m, θ, opt, loss; dtrain)
+#     for (x, y) in dtrain
+#         grads = gradient(θ) do
+#             loss(m, x |> gpu, Flux.onehotbatch(y, 1:1000) |> gpu)
+#         end
+#         update!(opt, θ, grads)
+#     end
+# end
+
 function train_epoch!(m, θ, opt, loss; dtrain)
-    for (x, y) in dtrain
+    for (batch, (x, y)) in enumerate(CuIterator(dtrain))
         grads = gradient(θ) do
-            loss(m, x |> gpu, Flux.onehotbatch(y, 1:1000) |> gpu)
+            loss(m, x, Flux.onehotbatch(y, 1:1000))
         end
         update!(opt, θ, grads)
+        batch % 200 == 0 && GC.gc(true)
     end
 end
 
-m_device = gpu
+const m_device = gpu
 
-@info "loading model / optimizer"
+# @info "loading model / optimizer"
 # m = ResNet(resnet_size, nclasses=1000) |> m_device;
-m = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-16.bson")[:model] |> m_device;
-opt = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-16.bson")[:opt] |> m_device;
-
-θ = Flux.params(m);
+# θ = Flux.params(m);
 
 # opt = Flux.Optimise.Nesterov(1.0f-3)
-# opt = Flux.Optimise.Adam(1f-4)
-#opt = Adam(1e-2)
-#s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
-#    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
-#opt = ParameterSchedulers.Scheduler(s, Adam())
+# opt = Flux.Optimise.NAdam(1.0f-5)
 
 results_path = "results"
 
-@time metric = eval_f(m, deval)
-@info "eval metric" metric
+# @time metric = eval_f(m, deval)
+# @info "eval metric" metric
 
 function train_loop(iter_start, iter_end)
+
+    iter_init = iter_start - 1
+    m = BSON.load("results/resnet$(resnet_size)-base-NAdam-A-$(iter_init).bson")[:model] |> m_device
+    opt = BSON.load("results/resnet$(resnet_size)-base-NAdam-A-$(iter_init).bson")[:opt] |> m_device
+    θ = Flux.params(m)
+
     for i in iter_start:iter_end
-        # Some Housekeeping
         GC.gc(true)
         CUDA.reclaim()
 
         if i == 1
-            opt.eta = 1.0f-3
+            opt.eta = 1.0f-5
         elseif i == 2
-            opt.eta = 5.0f-3
+            opt.eta = 1.0f-4
         elseif i == 3
-            opt.eta = 3.0f-2
-            # elseif i == 20
-            #     opt.eta = 1.0f-2
-            # elseif i == 21
-            #     opt.eta = 3.0f-3
-            # elseif i == 22
-            #     opt.eta = 1.0f-3
-        elseif i == 17
-            opt.eta = 3.0f-3
+            opt.eta = 1.0f-3
+        elseif i == 31
+            opt.eta = 1.0f-4
+        elseif i == 41
+            opt.eta = 3.0f-5
         end
 
         @info "iter: " i
         @info "opt.eta" opt.eta
-
         @time train_epoch!(m, θ, opt, loss; dtrain=dtrain)
+        @info "training epoch $i completed"
         metric = eval_f(m, deval)
         @info "eval metric" metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Nesterov-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-NAdam-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
     end
 end
 
-# @time train_loop(1, 20)
-@time train_loop(17, 32)
+# @time train_loop(1, 16)
+# @time train_loop(11, 20)
+# @time train_loop(21, 30)
+@time train_loop(31, 42)
+# @time train_loop(33, 48)
 # @time train_loop(25, 36)
 
 function metric_loop(iter_start, iter_end)
@@ -209,8 +217,8 @@ function metric_loop(iter_start, iter_end)
         GC.gc(true)
         CUDA.reclaim()
 
-        m = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-$i.bson")[:model] |> m_device
-        opt = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-$i.bson")[:opt] |> m_device
+        m = BSON.load("results/resnet$(resnet_size)-base-NAdam-A-$i.bson")[:model] |> m_device
+        opt = BSON.load("results/resnet$(resnet_size)-base-NAdam-A-$i.bson")[:opt] |> m_device
 
         @info "iter: " i
         @info "opt.eta" opt.eta
