@@ -18,7 +18,7 @@ using Flux: update!
 using ParameterSchedulers
 using Optimisers
 
-resnet_size = 34
+resnet_size = 50
 batchsize = 128
 
 @info "resnet" resnet_size
@@ -40,7 +40,7 @@ imgs_delete = joinpath.(train_img_path, first.(rsplit.(imgs_delete, "_", limit=2
 setdiff!(imgs, imgs_delete)
 
 Random.seed!(123)
-num_obs = length(imgs)
+num_obs = length(imgs) ÷ 10
 # num_obs = 1_000
 @info "num_obs" num_obs
 
@@ -110,7 +110,7 @@ function loop_data_cuiter(dtrain)
 end
 
 @info "start cpu loop"
-# @time loop_data_cpu(dtrain)
+@time loop_data_cpu(dtrain)
 # @time loop_data_cpu(dtrain)
 @info "start gpu loop"
 CUDA.@time loop_data_gpu(dtrain)

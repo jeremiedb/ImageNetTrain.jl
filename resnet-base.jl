@@ -17,8 +17,8 @@ using Flux
 using Flux: update!
 using ParameterSchedulers
 
-const resnet_size = 34
-const batchsize = 64
+const resnet_size = 50
+const batchsize = 20
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
@@ -117,12 +117,6 @@ end
 dtrain = DataLoader(ImageContainer(imgs[idtrain]); batchsize, partial=false, parallel=true, collate=true)
 deval = DataLoader(ValContainer(imgs_val, key_val); batchsize, partial=false, parallel=true, collate=true)
 
-#@info "iterating on eval data"
-#for (x,y) in deval
-#   println(size(y))
-#   println(typeof(y))
-#end
-
 function loss(m, x, y)
     Flux.Losses.logitcrossentropy(m(x), y)
 end
@@ -138,33 +132,19 @@ function eval_f(m, data)
     return acc
 end
 
-# function train_epoch!(m, θ, opt, loss; dtrain)
-#     for (x, y) in dtrain
-#         grads = gradient(θ) do
-#             loss(m, x |> gpu, Flux.onehotbatch(y, 1:1000) |> gpu)
-#         end
-#         update!(opt, θ, grads)
-#     end
-# end
-
 function train_epoch!(m, θ, opt, loss; dtrain)
     for (batch, (x, y)) in enumerate(CuIterator(dtrain))
         grads = gradient(θ) do
             loss(m, x, Flux.onehotbatch(y, 1:1000))
         end
         update!(opt, θ, grads)
-        batch % 200 == 0 && GC.gc(true)
+        # batch % 200 == 0 && GC.gc(true)
+        # batch % 200 == 0 && CUDA.reclaim()
+
     end
 end
 
 const m_device = gpu
-
-# @info "loading model / optimizer"
-# m = ResNet(resnet_size, nclasses=1000) |> m_device;
-# θ = Flux.params(m);
-
-# opt = Flux.Optimise.Nesterov(1.0f-3)
-# opt = Flux.Optimise.NAdam(1.0f-5)
 
 results_path = "results"
 
@@ -173,25 +153,45 @@ results_path = "results"
 
 function train_loop(iter_start, iter_end)
 
-    iter_init = iter_start - 1
-    m = BSON.load("results/resnet$(resnet_size)-base-NAdam-A-$(iter_init).bson")[:model] |> m_device
-    opt = BSON.load("results/resnet$(resnet_size)-base-NAdam-A-$(iter_init).bson")[:opt] |> m_device
+    if iter_start == 1
+        m = ResNet(resnet_size, nclasses=1000) |> m_device
+        opt = Flux.Optimise.Nesterov()
+        # opt = Flux.Optimise.NAdam()
+    else
+        iter_init = iter_start - 1
+        m = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-$(iter_init).bson")[:model] |> m_device
+        opt = BSON.load("results/resnet$(resnet_size)-base-Nesterov-A-$(iter_init).bson")[:opt] |> m_device
+    end
     θ = Flux.params(m)
 
     for i in iter_start:iter_end
         GC.gc(true)
         CUDA.reclaim()
 
+        # # NAdam resnet34
+        # if i == 1
+        #     opt.eta = 1.0f-5
+        # elseif i == 2
+        #     opt.eta = 1.0f-4
+        # elseif i == 3
+        #     opt.eta = 1.0f-3
+        # elseif i == 31
+        #     opt.eta = 1.0f-4
+        # elseif i == 41
+        #     opt.eta = 3.0f-5
+        # end
+
+        # Nesterov resnet50
         if i == 1
-            opt.eta = 1.0f-5
+            opt.eta = 1.0f-4
         elseif i == 2
-            opt.eta = 1.0f-4
+            opt.eta = 3.0f-3
         elseif i == 3
-            opt.eta = 1.0f-3
-        elseif i == 31
-            opt.eta = 1.0f-4
-        elseif i == 41
-            opt.eta = 3.0f-5
+            opt.eta = 3.0f-2
+        elseif i == 17
+            opt.eta = 3.0f-3
+        elseif i == 25
+            opt.eta = 3.0f-4
         end
 
         @info "iter: " i
@@ -200,16 +200,15 @@ function train_loop(iter_start, iter_end)
         @info "training epoch $i completed"
         metric = eval_f(m, deval)
         @info "eval metric" metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-NAdam-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Nesterov-B-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
     end
 end
 
-# @time train_loop(1, 16)
-# @time train_loop(11, 20)
-# @time train_loop(21, 30)
-@time train_loop(31, 42)
+@time train_loop(1, 11)
+# @time train_loop(16, 20)
+# @time train_loop(21, 28)
+# @time train_loop(31, 42)
 # @time train_loop(33, 48)
-# @time train_loop(25, 36)
 
 function metric_loop(iter_start, iter_end)
     for i in iter_start:iter_end
