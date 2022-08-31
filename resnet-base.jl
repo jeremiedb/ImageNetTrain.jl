@@ -1,3 +1,5 @@
+# ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
+
 using Images
 using Random
 using StatsBase: sample, shuffle
@@ -18,10 +20,11 @@ using Flux: update!
 using ParameterSchedulers
 
 const resnet_size = 50
-const batchsize = 20
+const batchsize = 16
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
+@info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
 
 # select device
 CUDA.device!(0)
@@ -140,7 +143,6 @@ function train_epoch!(m, θ, opt, loss; dtrain)
         update!(opt, θ, grads)
         # batch % 200 == 0 && GC.gc(true)
         # batch % 200 == 0 && CUDA.reclaim()
-
     end
 end
 
@@ -200,11 +202,11 @@ function train_loop(iter_start, iter_end)
         @info "training epoch $i completed"
         metric = eval_f(m, deval)
         @info "eval metric" metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Nesterov-B-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-base-Nesterov-A-$i.bson"), Dict(:model => m |> cpu, :opt => opt |> cpu))
     end
 end
 
-@time train_loop(1, 11)
+@time train_loop(1, 1)
 # @time train_loop(16, 20)
 # @time train_loop(21, 28)
 # @time train_loop(31, 42)

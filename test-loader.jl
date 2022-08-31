@@ -1,3 +1,5 @@
+# ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
+
 using Images
 using Random
 using StatsBase: sample, shuffle
@@ -23,6 +25,7 @@ batchsize = 128
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
+# @info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
 
 # select device
 # CUDA.device!(0)
@@ -40,7 +43,7 @@ imgs_delete = joinpath.(train_img_path, first.(rsplit.(imgs_delete, "_", limit=2
 setdiff!(imgs, imgs_delete)
 
 Random.seed!(123)
-num_obs = length(imgs) ÷ 10
+num_obs = length(imgs) ÷ 100
 # num_obs = 1_000
 @info "num_obs" num_obs
 
@@ -82,7 +85,7 @@ function getindex(data::ImageContainer, idx::Int)
     x = apply(tfm_train, Image(x))
     x = permutedims(channelview(RGB.(itemdata(x))), (3, 2, 1))
     x = Float32.(x)
-    return (x, Flux.onehot(y, 1:1000))
+    return (x, y)
 end
 
 # set data loaders
@@ -104,17 +107,19 @@ function loop_data_gpu(dtrain)
 end
 
 function loop_data_cuiter(dtrain)
-    for (iter, (x, y,)) in enumerate(CuIterator(dtrain))
-        sum(x), sum(y)
+    for (iter, (x, y)) in enumerate(CuIterator(dtrain))
+        sum(x)
     end
 end
 
 @info "start cpu loop"
 @time loop_data_cpu(dtrain)
-# @time loop_data_cpu(dtrain)
+@time loop_data_cpu(dtrain)
+
 @info "start gpu loop"
 CUDA.@time loop_data_gpu(dtrain)
-# CUDA.@time loop_data_gpu(dtrain)
-# @info "start cuiter loop"
-# CUDA.@time loop_data_cuiter(dtrain)
-# CUDA.@time loop_data_cuiter(dtrain)
+CUDA.@time loop_data_gpu(dtrain)
+
+@info "start cuiter loop"
+CUDA.@time loop_data_cuiter(dtrain)
+CUDA.@time loop_data_cuiter(dtrain)

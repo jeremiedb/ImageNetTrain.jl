@@ -1,3 +1,7 @@
+# comment out to enable default memory pool
+ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
+@info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
+
 using Images
 using Random
 using StatsBase: sample, shuffle
@@ -23,15 +27,15 @@ const batchsize = 20
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
 
+
 # select device
 CUDA.device!(0)
 
 #set model input image size
-const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
 Random.seed!(123)
-nobs = 1281144 ÷ 10
+nobs = 1281144 ÷ 100
 nbatch = nobs ÷ batchsize
 @info "nobs" nobs
 @info "nbatch" nbatch
@@ -43,8 +47,9 @@ end
 const m_device = gpu
 
 function train_epoch!(m, θ, opt, loss; nbatch)
+    x, y = CUDA.rand(im_size..., 3, batchsize), Flux.onehotbatch(rand(1:1000, batchsize), 1:1000) |> m_device
     for batch in 1:nbatch
-        x, y = CUDA.rand(im_size..., 3, batchsize), Flux.onehotbatch(rand(1:1000, batchsize), 1:1000) |> m_device
+        # x, y = CUDA.rand(im_size..., 3, batchsize), Flux.onehotbatch(rand(1:1000, batchsize), 1:1000) |> m_device
         grads = gradient(θ) do
             loss(m, x, y)
         end
@@ -65,4 +70,4 @@ function train_loop(iter_start, iter_end)
     end
 end
 
-@time train_loop(1, 1)
+train_loop(1, 3)
