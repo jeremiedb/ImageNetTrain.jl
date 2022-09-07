@@ -1,6 +1,6 @@
 # comment out to enable default memory pool
-ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
-@info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
+# ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
+# @info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
 
 using Images
 using Random
@@ -22,7 +22,7 @@ using Flux: update!
 using ParameterSchedulers
 
 const resnet_size = 50
-const batchsize = 20
+const batchsize = 32
 
 @info "resnet" resnet_size
 @info "nthreads" nthreads()
@@ -30,12 +30,14 @@ const batchsize = 20
 
 # select device
 CUDA.device!(0)
+release_threshold = 0
+attribute!(memory_pool(device()), CUDA.MEMPOOL_ATTR_RELEASE_THRESHOLD, UInt(release_threshold))
 
 #set model input image size
 const im_size = (224, 224)
 
 Random.seed!(123)
-nobs = 1281144 ÷ 100
+nobs = 1281144 ÷ 1000
 nbatch = nobs ÷ batchsize
 @info "nobs" nobs
 @info "nbatch" nbatch
