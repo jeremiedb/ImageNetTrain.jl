@@ -11,6 +11,9 @@ using MLUtils
 import MLUtils: getobs, getobs!
 using DataAugmentation
 
+# using ChainRulesCore
+# import ChainRulesCore: rrule
+
 using CUDA
 using Metalhead
 using Flux
@@ -18,18 +21,39 @@ using Flux: update!
 using ParameterSchedulers
 using Optimisers
 
-const resnet_size = 34
-const batchsize = 32
-
-@info "resnet" resnet_size
-@info "nthreads" nthreads()
-
-# select device
-CUDA.device!(0)
-
+const resnet_size = 50
+const batchsize = 16
 #set model input image size
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
+
+@info "resnet" resnet_size
+@info "batchsize" batchsize
+@info "nthreads" nthreads()
+
+# function ChainRulesCore.rrule(cfg::RuleConfig, c::Chain, x::AbstractArray)
+#     duo = accumulate(c.layers; init=(x, nothing)) do (input, _), layer
+#         out, back = rrule_via_ad(cfg, layer, input)
+#     end
+#     outs = map(first, duo)
+#     backs = map(last, duo)
+#     function un_chain(dout)
+#         multi = accumulate(reverse(backs); init=(nothing, dout)) do (_, delta), back
+#             dlayer, din = back(delta)
+#         end
+#         layergrads =
+#             foreach(CUDA.unsafe_free!, outs)
+#         foreach(CUDA.unsafe_free!, map(last, multi[1:end-1]))
+#         return (Tangent{Chain}(; layers=reverse(map(first, multi))), last(multi[end]))
+#     end
+#     outs[end], un_chain
+# end
+# # Could restrict this to x::CuArray... for testing instead write NaN into non-CuArrays, piratically:
+# CUDA.unsafe_free!(x::Array) = fill!(x, NaN)
+# CUDA.unsafe_free!(x::Flux.Zygote.Fill) = nothing
+
+# select device
+CUDA.device!(0)
 
 # list images
 train_img_path = joinpath(@__DIR__, "data/ILSVRC/Data/CLS-LOC/train")
@@ -43,6 +67,8 @@ Random.seed!(123)
 num_obs = length(imgs)
 # num_obs = 10_000
 @info "num_obs" num_obs
+updates_per_epoch = Int(floor(num_obs / batchsize))
+idtrain = shuffle(1:length(imgs))[1:num_obs]
 
 # list val images
 val_img_path = "data/ILSVRC/Data/CLS-LOC/val/"
@@ -64,10 +90,6 @@ for (idx, line) in enumerate(readlines("data/LOC_synset_mapping.txt"))
     push!(idx_to_name, idx => name)
 end
 
-# train eval split
-updates_per_epoch = Int(floor(num_obs / batchsize))
-idtrain = shuffle(1:length(imgs))[1:num_obs]
-
 # train image container
 struct ImageContainer{T<:Vector}
     img::T
@@ -81,7 +103,9 @@ function train_path_to_idx(path)
     return idx
 end
 
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -123,6 +147,10 @@ deval = DataLoader(ValContainer(imgs_val, key_val); batchsize, partial=false, pa
 #   println(typeof(y))
 #end
 
+function loss(m, x, y)
+    Flux.Losses.logitcrossentropy(m(x), y)
+end
+
 function eval_f(m, data)
     good = 0
     count = 0
@@ -134,21 +162,16 @@ function eval_f(m, data)
     return acc
 end
 
-function train_epoch!(m, state, loss; dtrain)
-    for (x, y) in dtrain
-        ∇m = gradient(m) do model  # calculate the gradients
-            loss(model, x |> gpu, Flux.onehotbatch(y, 1:1000) |> gpu)
-        end[1]
-        state, m = Optimisers.update!(state, m, ∇m)
+function train_epoch!(m, opts, loss; dtrain)
+    for (batch, (x, y)) in enumerate(CuIterator(dtrain))
+        y = Flux.onehotbatch(y, 1:1000)
+        grads = gradient((model) -> loss(model, x, y), m)[1]
+        Optimisers.update!(opts, m, grads)
     end
+    return nothing
 end
 
-function loss(m, x, y)
-    Flux.Losses.logitcrossentropy(m(x), y)
-end
-
-m_device = gpu
-m = ResNet(34, nclasses=1000) |> m_device;
+const m_device = gpu
 
 # x = rand(Float32, 224, 224, 3, 32) |> gpu;
 # y = rand(Int32.(1:1000), 32);
@@ -163,39 +186,45 @@ m = ResNet(34, nclasses=1000) |> m_device;
 #@info "loading optmiser"
 #opt = BSON.load("results/model-opt-iter-A-22.bson")[:opt]
 
-rule = Optimisers.Nesterov(1.0f-2)
-# rule = Optimisers.Adam(1f-3)
-state = Optimisers.setup(rule, m);
-
 #s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
 #    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
 #opt = ParameterSchedulers.Scheduler(s, Adam())
 
 results_path = "results"
 
-function train_loop(epochs)
-    for i in 1:epochs
+function train_loop(iter_start, iter_end)
+
+
+    if iter_start == 1
+        m = ResNet(resnet_size, nclasses=1000) |> m_device
+        rule = Optimisers.Nesterov(1.0f-2)
+        # rule = Optimisers.Adam(1f-3)
+        opts = Optimisers.setup(rule, m)
+    else
+        @error "model recovery not yet supported "
+        iter_init = iter_start - 1
+        m = BSON.load("results/resnet$(resnet_size)-optim-Nesterov-A-$(iter_init).bson")[:model] |> m_device
+        opts = BSON.load("results/resnet$(resnet_size)-optim-Nesterov-A-$(iter_init).bson")[:opts] |> m_device
+    end
+
+    for i in iter_start:iter_end
         @info "iter: " i
-        @info "opt.eta" opt.eta
         if i == 1
             metric = eval_f(m, deval)
             @info metric
         end
-        @time train_epoch!(m, state, loss; dtrain=dtrain)
+        @time train_epoch!(m, opts, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-optim-A-$i.bson"), Dict(:model => m |> cpu, :state => state |> cpu))
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-optim-Nesterov-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
         # if i == 1
         #     opt.eta = 1e-2
         # end
-        if i % 12 == 0
-            rule = Optimisers.Nesterov(1.0f-3)
-            state = Optimisers.setup(rule, m)
-            # opt.eta /= 4
+        if i % 10 == 0
+            Optimisers.adjust!(opts, 1e-3)
         end
     end
 end
 
 @info "Start training"
-# @time train_epoch!(m, state, loss; dtrain=dtrain)
-loop_epochs(16)
+train_loop(1, 12)

@@ -14,6 +14,7 @@ import Base: length, getindex
 using MLUtils
 import MLUtils: getobs, getobs!
 using DataAugmentation
+using Optimisers
 
 using ChainRulesCore
 import ChainRulesCore: rrule
@@ -49,8 +50,6 @@ end
 CUDA.unsafe_free!(x::Array) = fill!(x, NaN)
 CUDA.unsafe_free!(x::Flux.Zygote.Fill) = nothing
 
-
-
 @info "resnet" resnet_size
 @info "batchsize" batchsize
 @info "nthreads" nthreads()
@@ -84,29 +83,28 @@ end
 
 const m_device = gpu
 
-function train_epoch!(m, ps, opt, loss; nbatch)
+CUDA.allowscalar(true)
+function train_epoch!(m, opts, loss; nbatch)
     x, y = CUDA.rand(im_size..., 3, batchsize), Flux.onehotbatch(rand(1:1000, batchsize), 1:1000) |> m_device
+    # x, y = CUDA.rand(im_size..., 3, batchsize), rand(1:1000, batchsize) |> m_device
     for batch in 1:nbatch
         # GC.gc(true)
         # CUDA.reclaim()
-        # x, y = CUDA.rand(im_size..., 3, batchsize), Flux.onehotbatch(rand(1:1000, batchsize), 1:1000) |> m_device
-        grads = gradient(ps) do
-            loss(m, x, y)
-        end
-        update!(opt, ps, grads)
+        grads = gradient((model) -> loss(model, x, y), m)[1]
+        # y = Flux.onehotbatch(y, 1:1000)
+        # grads = gradient((model) -> loss(model, x, y), m)[1]
+        Optimisers.update!(opts, m, grads)
     end
 end
 
 @info "loading model / optimizer"
-m = ResNet(resnet_size, nclasses=1000) |> m_device;
-ps = Flux.params(m);
-opt = Flux.Optimise.Nesterov(1.0f-5)
 
 function train_loop(iter_start, iter_end)
+    m = ResNet(resnet_size, nclasses=1000) |> m_device
+    rule = Optimisers.Nesterov(1.0f-3)
+    opts = Optimisers.setup(rule, m)
     for i in iter_start:iter_end
-        GC.gc(true)
-        CUDA.reclaim()
-        @time train_epoch!(m, ps, opt, loss; nbatch)
+        @time train_epoch!(m, opts, loss; nbatch)
     end
 end
 
