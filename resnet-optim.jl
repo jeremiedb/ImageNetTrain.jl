@@ -11,18 +11,19 @@ using MLUtils
 import MLUtils: getobs, getobs!
 using DataAugmentation
 
-# using ChainRulesCore
-# import ChainRulesCore: rrule
+using ChainRulesCore
+import ChainRulesCore: rrule
 
 using CUDA
 using Metalhead
+using Metalhead: PartialFunctions
 using Flux
 using Flux: update!
 using ParameterSchedulers
 using Optimisers
 
 const resnet_size = 50
-const batchsize = 16
+const batchsize = 64
 #set model input image size
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
@@ -31,26 +32,26 @@ const im_size = (224, 224)
 @info "batchsize" batchsize
 @info "nthreads" nthreads()
 
-# function ChainRulesCore.rrule(cfg::RuleConfig, c::Chain, x::AbstractArray)
-#     duo = accumulate(c.layers; init=(x, nothing)) do (input, _), layer
-#         out, back = rrule_via_ad(cfg, layer, input)
-#     end
-#     outs = map(first, duo)
-#     backs = map(last, duo)
-#     function un_chain(dout)
-#         multi = accumulate(reverse(backs); init=(nothing, dout)) do (_, delta), back
-#             dlayer, din = back(delta)
-#         end
-#         layergrads =
-#             foreach(CUDA.unsafe_free!, outs)
-#         foreach(CUDA.unsafe_free!, map(last, multi[1:end-1]))
-#         return (Tangent{Chain}(; layers=reverse(map(first, multi))), last(multi[end]))
-#     end
-#     outs[end], un_chain
-# end
-# # Could restrict this to x::CuArray... for testing instead write NaN into non-CuArrays, piratically:
-# CUDA.unsafe_free!(x::Array) = fill!(x, NaN)
-# CUDA.unsafe_free!(x::Flux.Zygote.Fill) = nothing
+function ChainRulesCore.rrule(cfg::RuleConfig, c::Chain, x::AbstractArray)
+    duo = accumulate(c.layers; init=(x, nothing)) do (input, _), layer
+        out, back = rrule_via_ad(cfg, layer, input)
+    end
+    outs = map(first, duo)
+    backs = map(last, duo)
+    function un_chain(dout)
+        multi = accumulate(reverse(backs); init=(nothing, dout)) do (_, delta), back
+            dlayer, din = back(delta)
+        end
+        layergrads =
+            foreach(CUDA.unsafe_free!, outs)
+        foreach(CUDA.unsafe_free!, map(last, multi[1:end-1]))
+        return (Tangent{Chain}(; layers=reverse(map(first, multi))), last(multi[end]))
+    end
+    outs[end], un_chain
+end
+# Could restrict this to x::CuArray... for testing instead write NaN into non-CuArrays, piratically:
+CUDA.unsafe_free!(x::Array) = fill!(x, NaN)
+CUDA.unsafe_free!(x::Flux.Zygote.Fill) = nothing
 
 # select device
 CUDA.device!(0)
@@ -114,7 +115,8 @@ function getindex(data::ImageContainer, idx::Int)
     x = apply(tfm_train, Image(x))
     x = permutedims(channelview(RGB.(itemdata(x))), (3, 2, 1))
     x = Float32.(x)
-    return (x, y)
+    # return (x, y)
+    return (x, Flux.onehotbatch(y, 1:1000))
 end
 
 # val image container
@@ -124,7 +126,6 @@ struct ValContainer{T<:Vector,S<:Vector}
 end
 
 length(data::ValContainer) = length(data.img)
-
 tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
 
 function getindex(data::ValContainer, idx::Int)
@@ -164,7 +165,6 @@ end
 
 function train_epoch!(m, opts, loss; dtrain)
     for (batch, (x, y)) in enumerate(CuIterator(dtrain))
-        y = Flux.onehotbatch(y, 1:1000)
         grads = gradient((model) -> loss(model, x, y), m)[1]
         Optimisers.update!(opts, m, grads)
     end
@@ -172,28 +172,9 @@ function train_epoch!(m, opts, loss; dtrain)
 end
 
 const m_device = gpu
-
-# x = rand(Float32, 224, 224, 3, 32) |> gpu;
-# y = rand(Int32.(1:1000), 32);
-# @time ∇m = gradient(m) do model  # calculate the gradients
-#     loss(model, x |> gpu, Flux.onehotbatch(y, 1:1000) |> gpu)
-# end[1];
-# @time state, m = Optimisers.update(state, m, ∇m);
-# @time state, m = Optimisers.update!(state, m, ∇m);
-
-#@info "loading model"
-#m = BSON.load("results/model-opt-iter-A-22.bson")[:model]
-#@info "loading optmiser"
-#opt = BSON.load("results/model-opt-iter-A-22.bson")[:opt]
-
-#s = ParameterSchedulers.Sequence(1f-4 => 1 * updates_per_epoch, 3f-4 => 1 * updates_per_epoch, 1f-3 => 14 * updates_per_epoch,
-#    1f-4 => 12 * updates_per_epoch, 3f-4 => 4 * updates_per_epoch, 3f-5 => 12 * updates_per_epoch, 1f-5 => 4 * updates_per_epoch)
-#opt = ParameterSchedulers.Scheduler(s, Adam())
-
-results_path = "results"
+const results_path = "results"
 
 function train_loop(iter_start, iter_end)
-
 
     if iter_start == 1
         m = ResNet(resnet_size, nclasses=1000) |> m_device
@@ -201,15 +182,15 @@ function train_loop(iter_start, iter_end)
         # rule = Optimisers.Adam(1f-3)
         opts = Optimisers.setup(rule, m)
     else
-        @error "model recovery not yet supported "
+        # @error "model recovery not yet supported "
         iter_init = iter_start - 1
-        m = BSON.load("results/resnet$(resnet_size)-optim-Nesterov-A-$(iter_init).bson")[:model] |> m_device
-        opts = BSON.load("results/resnet$(resnet_size)-optim-Nesterov-A-$(iter_init).bson")[:opts] |> m_device
+        m = BSON.load("results/resnet$(resnet_size)-optim-Nesterov-A-$(iter_init).bson", @__MODULE__)[:model] |> m_device
+        opts = BSON.load("results/resnet$(resnet_size)-optim-Nesterov-A-$(iter_init).bson", @__MODULE__)[:opts] |> m_device
     end
 
     for i in iter_start:iter_end
         @info "iter: " i
-        if i == 1
+        if i == iter_start
             metric = eval_f(m, deval)
             @info metric
         end
@@ -217,14 +198,15 @@ function train_loop(iter_start, iter_end)
         metric = eval_f(m, deval)
         @info metric
         BSON.bson(joinpath(results_path, "resnet$(resnet_size)-optim-Nesterov-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
-        # if i == 1
-        #     opt.eta = 1e-2
-        # end
-        if i % 10 == 0
+        if i > 20
             Optimisers.adjust!(opts, 1e-3)
+        elseif i > 40
+            Optimisers.adjust!(opts, 1e-4)
+        elseif i > 60
+            Optimisers.adjust!(opts, 3e-5)
         end
     end
 end
 
 @info "Start training"
-train_loop(1, 12)
+train_loop(11, 24)

@@ -1,6 +1,6 @@
 # comment out to enable default memory pool
-# ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
-# @info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
+ENV["JULIA_CUDA_MEMORY_POOL"] = "none"
+@info "JULIA_CUDA_MEMORY_POOL" ENV["JULIA_CUDA_MEMORY_POOL"] 
 
 using Images
 using Random
@@ -28,28 +28,6 @@ using ParameterSchedulers
 const resnet_size = 50
 const batchsize = 64
 
-
-function ChainRulesCore.rrule(cfg::RuleConfig, c::Chain, x::AbstractArray)
-    duo = accumulate(c.layers; init=(x, nothing)) do (input, _), layer
-        out, back = rrule_via_ad(cfg, layer, input)
-    end
-    outs = map(first, duo)
-    backs = map(last, duo)
-    function un_chain(dout)
-        multi = accumulate(reverse(backs); init=(nothing, dout)) do (_, delta), back
-            dlayer, din = back(delta)
-        end
-        layergrads =
-            foreach(CUDA.unsafe_free!, outs)
-        foreach(CUDA.unsafe_free!, map(last, multi[1:end-1]))
-        return (Tangent{Chain}(; layers=reverse(map(first, multi))), last(multi[end]))
-    end
-    outs[end], un_chain
-end
-# Could restrict this to x::CuArray... for testing instead write NaN into non-CuArrays, piratically:
-CUDA.unsafe_free!(x::Array) = fill!(x, NaN)
-CUDA.unsafe_free!(x::Flux.Zygote.Fill) = nothing
-
 @info "resnet" resnet_size
 @info "batchsize" batchsize
 @info "nthreads" nthreads()
@@ -58,7 +36,7 @@ CUDA.unsafe_free!(x::Flux.Zygote.Fill) = nothing
 # select device - CUDA tests
 ################################
 CUDA.device!(0)
-dev = CUDA.device()
+# dev = CUDA.device()
 # attribute(dev, CUDA.DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED)
 # release_threshold = UInt64(1e9)
 # Int(attribute(UInt64, CuMemoryPool(dev), CUDA.MEMPOOL_ATTR_RELEASE_THRESHOLD))
@@ -91,8 +69,6 @@ function train_epoch!(m, opts, loss; nbatch)
         # GC.gc(true)
         # CUDA.reclaim()
         grads = gradient((model) -> loss(model, x, y), m)[1]
-        # y = Flux.onehotbatch(y, 1:1000)
-        # grads = gradient((model) -> loss(model, x, y), m)[1]
         Optimisers.update!(opts, m, grads)
     end
 end
