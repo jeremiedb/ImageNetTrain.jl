@@ -23,13 +23,13 @@ using Flux: Optimisers
 using Optimisers: OptimiserChain
 using ParameterSchedulers
 
-const resnet_size = 34
+const config = :small
 const batchsize = 64
 #set model input image size
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
-@info "resnet" resnet_size
+@info "model config" config
 @info "batchsize" batchsize
 @info "nthreads" nthreads()
 
@@ -73,7 +73,7 @@ updates_per_epoch = Int(floor(num_obs / batchsize))
 idtrain = shuffle(1:length(imgs))[1:num_obs]
 
 # list val images
-val_img_path = "data/ILSVRC/Data/CLS-LOC/val_ori/"
+val_img_path = "data/ILSVRC/Data/CLS-LOC/val/"
 val_mapping = CSV.read("data/LOC_val_solution.csv", DataFrame)
 transform!(val_mapping, :PredictionString => ByRow(x -> x[1:9]) => :label_key)
 imgs_val = val_mapping[:, :ImageId]
@@ -106,8 +106,9 @@ function train_path_to_idx(path)
 end
 
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), AdjustContrast(0.2), AdjustBrightness(0.2))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -130,7 +131,7 @@ struct ValContainer{T<:Vector,S<:Vector}
 end
 
 length(data::ValContainer) = length(data.img)
-tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size))
+tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
 
 function getindex(data::ValContainer, idx::Int)
     path = data.img[idx]
@@ -184,15 +185,15 @@ const results_path = "results"
 function train_loop(iter_start, iter_end)
 
     if iter_start == 1
-        m = ResNet(resnet_size, nclasses=1000) |> m_device
+        m = EfficientNetv2(config; nclasses=1000) |> m_device
         # rule = Optimisers.Nesterov(1.0f-2)
         # rule = Optimisers.Adam(1f-3)
-        rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-3))
+        rule = OptimiserChain(Optimisers.WeightDecay(1f-5), Optimisers.Adam(1f-3))
         opts = Flux.setup(rule, m)
     else
         iter_init = iter_start - 1
-        m = BSON.load("results/resnet$(resnet_size)-optim-WAdam-B-$(iter_init).bson", @__MODULE__)[:model] |> m_device
-        opts = BSON.load("results/resnet$(resnet_size)-optim-WAdam-B-$(iter_init).bson", @__MODULE__)[:opts] |> m_device
+        m = BSON.load("results/efficientnet-v2-$(config)-optim-WAdam-A-$(iter_init).bson", @__MODULE__)[:model] |> m_device
+        opts = BSON.load("results/efficientnet-v2-$(config)-optim-WAdam-A-$(iter_init).bson", @__MODULE__)[:opts] |> m_device
     end
 
     for i in iter_start:iter_end
@@ -201,25 +202,21 @@ function train_loop(iter_start, iter_end)
             metric = eval_f(m, deval)
             @info metric
         end
-        if i == 41
-            Optimisers.adjust!(opts, 1e-4)
-            # rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-3))
-            # opts = Optimisers.setup(rule, m)
-            @info "optim adjustment"
-        elseif i == 40
-            # Optimisers.adjust!(opts, 1e-4)
-        elseif i == 60
-            Optimisers.adjust!(opts, 1e-5)
-            # rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-3))
-            # opts = Optimisers.setup(rule, m)
-            @info "optim adjustment"
-        end
         @time train_epoch!(m, opts, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info metric
-        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-optim-WAdam-B-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
+        BSON.bson(joinpath(results_path, "efficientnet-v2-$(config)-optim-WAdam-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
+        if i == 20
+            # Optimisers.adjust!(opts, 1e-3)
+            # rule OptimiserChain(WeightDecay(1f-5), Adam(1e-3))
+            # opts = Optimisers.setup(rule, m)
+        elseif i == 40
+            # Optimisers.adjust!(opts, 1e-4)
+        elseif i == 60
+            # Optimisers.adjust!(opts, 3e-5)
+        end
     end
 end
 
 @info "Start training"
-train_loop(49, 66)
+train_loop(1, 50)
