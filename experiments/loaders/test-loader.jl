@@ -35,10 +35,10 @@ const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
 # list images
-train_img_path = joinpath(@__DIR__, "data/ILSVRC/Data/CLS-LOC/train")
+train_img_path = joinpath(@__DIR__, "../../data/ILSVRC/Data/CLS-LOC/train")
 imgs = vcat([readdir(dir, join=true) for dir in readdir(train_img_path, join=true)]...)
 # remove CMY / png images: https://github.com/cytsai/ilsvrc-cmyk-image-list
-include("utils.jl");
+include("../../utils.jl");
 imgs_delete = joinpath.(train_img_path, first.(rsplit.(imgs_delete, "_", limit=2)), imgs_delete)
 setdiff!(imgs, imgs_delete)
 
@@ -51,7 +51,7 @@ num_obs = length(imgs) ÷ 100
 key_to_idx = Dict{String,Int}()
 key_to_name = Dict{String,String}()
 idx_to_name = Dict{Int,String}()
-for (idx, line) in enumerate(readlines("data/LOC_synset_mapping.txt"))
+for (idx, line) in enumerate(readlines("../../data/LOC_synset_mapping.txt"))
     key = replace(line, r"(n\d+)\s(.+)" => s"\1")
     name = replace(line, r"(n\d+)\s(\w+),?(.+)" => s"\2")
     push!(key_to_idx, key => idx)

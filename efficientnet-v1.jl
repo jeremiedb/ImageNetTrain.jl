@@ -23,14 +23,14 @@ using Flux: Optimisers
 using Optimisers: OptimiserChain
 using ParameterSchedulers
 
-const config = :small # [:small, :medium, :large, :xlarge]
+const config = :b3 # [:b0, :b1, :b2, :b3, :b4, :b5, :b6, :b7, :b8]
 const batchsize = 64
 #set model input image size
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
 const m_device = gpu
-const results_path = "results/efficientnet-v2"
+const results_path = "results/efficientnet-v1"
 
 @info "model config" config
 @info "batchsize" batchsize
@@ -182,15 +182,10 @@ function train_epoch!(m, opts, loss; dtrain)
     return nothing
 end
 
-const m_device = gpu
-const results_path = "results/efficientnet-v2"
-
 function train_loop(iter_start, iter_end)
 
     if iter_start == 1
-        m = EfficientNetv2(config; nclasses=1000) |> m_device
-        # rule = Optimisers.Nesterov(1.0f-2)
-        # rule = Optimisers.Adam(1f-3)
+        m = EfficientNet(config; nclasses=1000) |> m_device
         rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-3))
         opts = Flux.setup(rule, m)
     else
@@ -209,10 +204,18 @@ function train_loop(iter_start, iter_end)
         metric = eval_f(m, deval)
         @info metric
         BSON.bson(joinpath(results_path, "$(config)-optim-adam-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
-        if i == 20
-            # Optimisers.adjust!(opts, 1e-3)
-            # rule OptimiserChain(WeightDecay(1f-5), Adam(1e-3))
-            # opts = Optimisers.setup(rule, m)
+        if i == 1
+            Optimisers.adjust!(opts, 1e-5)
+            @info "optim adjustment"
+        elseif i == 2
+            Optimisers.adjust!(opts, 1e-4)
+            @info "optim adjustment"
+        elseif i == 3
+            Optimisers.adjust!(opts, 1e-3)
+            @info "optim adjustment"
+        elseif i == 21
+            Optimisers.adjust!(opts, 1e-4)
+            @info "optim adjustment"
         elseif i == 40
             # Optimisers.adjust!(opts, 1e-4)
         elseif i == 60

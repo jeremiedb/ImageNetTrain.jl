@@ -7,8 +7,6 @@ using CSV
 using DataFrames
 
 import Base: length, getindex
-using MLUtils
-import MLUtils: getobs, getobs!
 using DataAugmentation
 
 using ChainRulesCore
@@ -18,21 +16,22 @@ using CUDA
 using Metalhead
 using Metalhead: PartialFunctions
 using Flux
-using Flux: update!
-using Flux: Optimisers
+using MLUtils
+# using Flux.MLUtils, DataLoader
+using Flux: Optimisers, update!
 using Optimisers: OptimiserChain
 using ParameterSchedulers
 
-const config = :small # [:small, :medium, :large, :xlarge]
-const batchsize = 64
+const resnet_size = 34
+const batchsize = 128
 #set model input image size
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
 const m_device = gpu
-const results_path = "results/efficientnet-v2"
+const results_path = "results/resnet"
 
-@info "model config" config
+@info "resnet" resnet_size
 @info "batchsize" batchsize
 @info "nthreads" nthreads()
 
@@ -76,7 +75,7 @@ updates_per_epoch = Int(floor(num_obs / batchsize))
 idtrain = shuffle(1:length(imgs))[1:num_obs]
 
 # list val images
-val_img_path = "data/ILSVRC/Data/CLS-LOC/val/"
+val_img_path = "data/ILSVRC/Data/CLS-LOC/val_ori/"
 val_mapping = CSV.read("data/LOC_val_solution.csv", DataFrame)
 transform!(val_mapping, :PredictionString => ByRow(x -> x[1:9]) => :label_key)
 imgs_val = val_mapping[:, :ImageId]
@@ -108,21 +107,21 @@ function train_path_to_idx(path)
     return idx
 end
 
-# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), AdjustContrast(0.2), AdjustBrightness(0.2))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.1), AdjustBrightness(0.1))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
-# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
     y = train_path_to_idx(path)
-    x = Images.load(path)
-    x = apply(tfm_train, Image(x))
-    mu = [0.485, 0.456, 0.406]
-    sigma = [0.229, 0.224, 0.225]
-    x = (channelview(RGB.(itemdata(x))) .- mu) ./ sigma
-    # x = channelview(RGB.(itemdata(x))), (3, 2, 1)
-    x = Float32.(permutedims(x, (3, 2, 1)))
+    img = Images.load(path)
+    img = apply(tfm_train, Image(img))
+    x = channelview(float32.(RGB.(itemdata(img))))
+    # x = collect(channelview(float32.(RGB.(itemdata(img)))))
+    mu = Float32.([0.485, 0.456, 0.406])
+    sigma = Float32.([0.229, 0.224, 0.225])
+    x = permutedims((x .- mu) ./ sigma, (3, 2, 1))
     # return (x, y)
     return (x, Flux.onehotbatch(y, 1:1000))
 end
@@ -134,18 +133,18 @@ struct ValContainer{T<:Vector,S<:Vector}
 end
 
 length(data::ValContainer) = length(data.img)
-tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
+tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size))
 
 function getindex(data::ValContainer, idx::Int)
     path = data.img[idx]
     y = key_to_idx[data.key[idx]]
-    x = Images.load(path)
-    x = apply(tfm_val, Image(x))
-    mu = [0.485, 0.456, 0.406]
-    sigma = [0.229, 0.224, 0.225]
-    x = (channelview(RGB.(itemdata(x))) .- mu) ./ sigma
-    # x = channelview(RGB.(itemdata(x))), (3, 2, 1)
-    x = Float32.(permutedims(x, (3, 2, 1)))
+    img = Images.load(path)
+    img = apply(tfm_val, Image(img))
+    x = channelview(float32.(RGB.(itemdata(img))))
+    # x = collect(channelview(float32.(RGB.(itemdata(img)))))
+    mu = Float32.([0.485, 0.456, 0.406])
+    sigma = Float32.([0.229, 0.224, 0.225])
+    x = permutedims((x .- mu) ./ sigma, (3, 2, 1))
     return (x, y)
 end
 
@@ -153,12 +152,7 @@ end
 dtrain = DataLoader(ImageContainer(imgs[idtrain]); batchsize, partial=false, parallel=true, collate=true)
 deval = DataLoader(ValContainer(imgs_val, key_val); batchsize, partial=false, parallel=true, collate=true)
 
-#@info "iterating on eval data"
-#for (x,y) in deval
-#   println(size(y))
-#   println(typeof(y))
-#end
-
+# loss
 function loss(m, x, y)
     Flux.Losses.logitcrossentropy(m(x), y)
 end
@@ -182,21 +176,16 @@ function train_epoch!(m, opts, loss; dtrain)
     return nothing
 end
 
-const m_device = gpu
-const results_path = "results/efficientnet-v2"
-
 function train_loop(iter_start, iter_end)
 
     if iter_start == 1
-        m = EfficientNetv2(config; nclasses=1000) |> m_device
-        # rule = Optimisers.Nesterov(1.0f-2)
-        # rule = Optimisers.Adam(1f-3)
+        m = ResNet(resnet_size, nclasses=1000) |> m_device
         rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-3))
         opts = Flux.setup(rule, m)
     else
-        iter_init = iter_start - 1
-        m = BSON.load(joinpath(results_path, "$(config)-optim-adam-A-$(iter_init).bson", @__MODULE__)[:model] |> m_device
-        opts = BSON.load(joinpath(results_path, "$(config)-optim-adam-A-$(iter_init).bson", @__MODULE__)[:opts] |> m_device
+        init = iter_start - 1
+        m = BSON.load(joinpath(results_path, "resnet$(resnet_size)-optim-adam-A-$init.bson"), @__MODULE__)[:model] |> m_device
+        opts = BSON.load(joinpath(results_path, "resnet$(resnet_size)-optim-adam-A-$init.bson"), @__MODULE__)[:opts] |> m_device
     end
 
     for i in iter_start:iter_end
@@ -205,21 +194,40 @@ function train_loop(iter_start, iter_end)
             metric = eval_f(m, deval)
             @info metric
         end
+        if i == 1
+            Optimisers.adjust!(opts, 1e-5)
+            @info "optim adjustment"
+        elseif i == 2
+            Optimisers.adjust!(opts, 1e-4)
+            @info "optim adjustment"
+        elseif i == 3
+            Optimisers.adjust!(opts, 1e-3)
+            @info "optim adjustment"
+        elseif i == 21
+            Optimisers.adjust!(opts, 1e-4)
+            @info "optim adjustment"
+        elseif i == 41
+            Optimisers.adjust!(opts, 1e-5)
+            @info "optim adjustment"
+        elseif i == 61
+            Optimisers.adjust!(opts, 3e-6)
+            @info "optim adjustment"
+        elseif i == 71
+            Optimisers.adjust!(opts, 1e-6)
+            @info "optim adjustment"
+        elseif i == 81
+            rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-5))
+            # rule = OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Nesterov(1.0f-5))
+            opts = Flux.setup(rule, m)
+            # Optimisers.adjust!(opts, 1e-5)
+            # @info "optim adjustment"
+        end
         @time train_epoch!(m, opts, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info metric
-        BSON.bson(joinpath(results_path, "$(config)-optim-adam-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
-        if i == 20
-            # Optimisers.adjust!(opts, 1e-3)
-            # rule OptimiserChain(WeightDecay(1f-5), Adam(1e-3))
-            # opts = Optimisers.setup(rule, m)
-        elseif i == 40
-            # Optimisers.adjust!(opts, 1e-4)
-        elseif i == 60
-            # Optimisers.adjust!(opts, 3e-5)
-        end
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-optim-adam-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
     end
 end
 
 @info "Start training"
-train_loop(1, 50)
+train_loop(33, 60)
