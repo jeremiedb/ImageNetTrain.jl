@@ -6,8 +6,8 @@ Data downloaded from: https://www.kaggle.com/c/imagenet-object-localization-chal
 kaggle competitions download imagenet-object-localization-challenge
 ```
 
-Training is performed by the `resnet-optim.jl` script: 
+Training is performed by the `resnet-nesterov.jl` script: 
 
 ```
-julia --project=@. --threads=8 resnet-optim.jl
+julia --project=@. --threads=8 resnet-nesterov.jl
 ```

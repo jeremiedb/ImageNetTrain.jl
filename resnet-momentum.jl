@@ -7,8 +7,6 @@ using CSV
 using DataFrames
 
 import Base: length, getindex
-using MLUtils
-import MLUtils: getobs, getobs!
 using DataAugmentation
 
 using ChainRulesCore
@@ -17,23 +15,19 @@ import ChainRulesCore: rrule
 using CUDA
 using Metalhead
 using Flux
-using Flux: DataLoader, Optimisers
+using Flux: MLUtils, DataLoader, Optimisers
 using ParameterSchedulers
 
-# 8682.136970 seconds (3.59 G allocations: 7.230 TiB, 6.24% gc time)
-# [ Info: 0.0016005121638924455
-# ┌ Info: iter: 
-# └   i = 5
-const config = :b3 # [:b0, :b1, :b2, :b3, :b4, :b5, :b6, :b7, :b8]
-const batchsize = 64
+const resnet_size = 34
+const batchsize = 128
 #set model input image size
 const im_size_pre = (256, 256)
 const im_size = (224, 224)
 
 const m_device = gpu
-const results_path = "results/efficientnet-v1"
+const results_path = "results/resnet"
 
-@info "model config" config
+@info "resnet" resnet_size
 @info "batchsize" batchsize
 @info "nthreads" nthreads()
 
@@ -109,10 +103,11 @@ function train_path_to_idx(path)
     return idx
 end
 
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.2), AdjustBrightness(0.2))
-# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), AdjustContrast(0.2), AdjustBrightness(0.2))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), Maybe(FlipY()), AdjustContrast(0.1), AdjustBrightness(0.1))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.4), AdjustBrightness(0.4))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
-# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size))
 
 function getindex(data::ImageContainer, idx::Int)
     path = data.img[idx]
@@ -124,6 +119,7 @@ function getindex(data::ImageContainer, idx::Int)
     sigma = Float32.([0.229, 0.224, 0.225])
     x = permutedims((x .- mu) ./ sigma, (3, 2, 1))
     return (x, y)
+    # return (x, Flux.onehotbatch(y, 1:1000))
 end
 
 # val image container
@@ -133,7 +129,7 @@ struct ValContainer{T<:Vector,S<:Vector}
 end
 
 length(data::ValContainer) = length(data.img)
-tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size), CenterCrop(im_size))
+tfm_val = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size))
 
 function getindex(data::ValContainer, idx::Int)
     path = data.img[idx]
@@ -151,6 +147,7 @@ end
 dtrain = DataLoader(ImageContainer(imgs[idtrain]); batchsize, partial=false, parallel=true, collate=true)
 deval = DataLoader(ValContainer(imgs_val, key_val); batchsize, partial=false, parallel=true, collate=true)
 
+# loss
 function loss(m, x, y)
     Flux.Losses.logitcrossentropy(m(x), Flux.onehotbatch(y, 1:1000))
 end
@@ -177,13 +174,13 @@ end
 function train_loop(iter_start, iter_end)
 
     if iter_start == 1
-        m = EfficientNet(config; nclasses=1000) |> m_device
-        rule = Optimisers.OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-3))
+        m = ResNet(resnet_size, nclasses=1000) |> m_device
+        rule = Optimisers.OptimiserChain(Optimisers.WeightDecay(1f-4), Optimisers.Momentum(1f-1, 0.9f0))
         opts = Flux.setup(rule, m)
     else
         init = iter_start - 1
-        m = BSON.load(joinpath(results_path, "$(config)-optim-adam-A-$init.bson", @__MODULE__)[:model]) |> m_device
-        opts = BSON.load(joinpath(results_path, "$(config)-optim-adam-A-$init.bson", @__MODULE__)[:opts]) |> m_device
+        m = BSON.load(joinpath(results_path, "resnet$(resnet_size)-Momentum-B-$init.bson"), @__MODULE__)[:model] |> m_device
+        opts = BSON.load(joinpath(results_path, "resnet$(resnet_size)-Momentum-B-$init.bson"), @__MODULE__)[:opts] |> m_device
     end
 
     for i in iter_start:iter_end
@@ -192,29 +189,28 @@ function train_loop(iter_start, iter_end)
             metric = eval_f(m, deval)
             @info metric
         end
-        if i == 1
-            Optimisers.adjust!(opts, 1e-5)
+        if i == 17
+            Optimisers.adjust!(opts, 1f-2)
             @info "optim adjustment"
-        elseif i == 2
-            Optimisers.adjust!(opts, 1e-4)
+        elseif i == 31
+            Optimisers.adjust!(opts, 3f-3)
             @info "optim adjustment"
-        elseif i == 3
-            Optimisers.adjust!(opts, 1e-3)
+        elseif i == 36
+            Optimisers.adjust!(opts, 1f-3)
             @info "optim adjustment"
-        elseif i == 21
-            Optimisers.adjust!(opts, 1e-4)
+        elseif i == 41
+            Optimisers.adjust!(opts, 1f-4)
             @info "optim adjustment"
-        elseif i == 40
-            # Optimisers.adjust!(opts, 1e-4)
-        elseif i == 60
-            # Optimisers.adjust!(opts, 3e-5)
+        elseif i == 51
+            Optimisers.adjust!(opts, 1f-5)
+            @info "optim adjustment"
         end
         @time train_epoch!(m, opts, loss; dtrain=dtrain)
         metric = eval_f(m, deval)
         @info metric
-        BSON.bson(joinpath(results_path, "$(config)-optim-adam-A-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
+        BSON.bson(joinpath(results_path, "resnet$(resnet_size)-Momentum-C-$i.bson"), Dict(:model => m |> cpu, :opts => opts |> cpu))
     end
 end
 
 @info "Start training"
-train_loop(1, 50)
+train_loop(31, 50)
