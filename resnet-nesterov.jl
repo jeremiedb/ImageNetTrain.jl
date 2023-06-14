@@ -103,8 +103,10 @@ function train_path_to_idx(path)
     return idx
 end
 
+tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.3), AdjustBrightness(0.3))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), AdjustContrast(0.4), AdjustBrightness(0.4))
+# tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size), Maybe(FlipX()), AdjustContrast(0.4), AdjustBrightness(0.4))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()), Maybe(FlipY()), AdjustContrast(0.1), AdjustBrightness(0.1))
-tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), AdjustContrast(0.4), AdjustBrightness(0.4))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size), Maybe(FlipX()))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), RandomCrop(im_size))
 # tfm_train = DataAugmentation.compose(ScaleKeepAspect(im_size_pre), CenterCrop(im_size))
@@ -175,12 +177,12 @@ function train_loop(iter_start, iter_end)
 
     if iter_start == 1
         m = ResNet(resnet_size, nclasses=1000) |> m_device
-        rule = Optimisers.OptimiserChain(Optimisers.WeightDecay(1f-4), Optimisers.Nesterov(1f-1)
+        rule = Optimisers.OptimiserChain(Optimisers.WeightDecay(1.0f-4), Optimisers.Nesterov(1.0f-1, 0.85f0))
         opts = Flux.setup(rule, m)
     else
         init = iter_start - 1
-        m = BSON.load(joinpath(results_path, "resnet$(resnet_size)-optim-Nesterov-A-$init.bson"), @__MODULE__)[:model] |> m_device
-        opts = BSON.load(joinpath(results_path, "resnet$(resnet_size)-optim-Nesterov-A-$init.bson"), @__MODULE__)[:opts] |> m_device
+        m = BSON.load(joinpath(results_path, "resnet$(resnet_size)-Nesterov-A-$init.bson"), @__MODULE__)[:model] |> m_device
+        opts = BSON.load(joinpath(results_path, "resnet$(resnet_size)-Nesterov-A-$init.bson"), @__MODULE__)[:opts] |> m_device
     end
 
     for i in iter_start:iter_end
@@ -189,14 +191,23 @@ function train_loop(iter_start, iter_end)
             metric = eval_f(m, deval)
             @info metric
         end
-        if i == 16
-            Optimisers.adjust!(opts, 1e-2)
+        if i == 1
+            Optimisers.adjust!(opts, 1.0f-3)
             @info "optim adjustment"
-        elseif i == 31
-            Optimisers.adjust!(opts, 1e-3)
+        elseif i == 2
+            Optimisers.adjust!(opts, 1.0f-2)
             @info "optim adjustment"
-        elseif i == 46
-            Optimisers.adjust!(opts, 1e-4)
+        elseif i == 3
+            Optimisers.adjust!(opts, 1.0f-1)
+            @info "optim adjustment"
+        elseif i == 21
+            Optimisers.adjust!(opts, 1.0f-2)
+            @info "optim adjustment"
+        elseif i == 41
+            Optimisers.adjust!(opts, 1.0f-3)
+            @info "optim adjustment"
+        elseif i == 61
+            Optimisers.adjust!(opts, 1.0f-4)
             @info "optim adjustment"
         end
         @time train_epoch!(m, opts, loss; dtrain=dtrain)
@@ -207,4 +218,4 @@ function train_loop(iter_start, iter_end)
 end
 
 @info "Start training"
-train_loop(1, 31)
+train_loop(16, 65)

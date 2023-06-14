@@ -175,7 +175,7 @@ function train_loop(iter_start, iter_end)
 
     if iter_start == 1
         m = ResNet(resnet_size, nclasses=1000) |> m_device
-        rule = Optimisers.OptimiserChain(Optimisers.WeightDecay(1f-5), Optimisers.Adam(1f-4))
+        rule = Optimisers.OptimiserChain(Optimisers.WeightDecay(1.0f-5), Optimisers.Adam(1.0f-4))
         opts = Flux.setup(rule, m)
     else
         init = iter_start - 1
@@ -190,13 +190,13 @@ function train_loop(iter_start, iter_end)
             @info metric
         end
         if i == 11
-            Optimisers.adjust!(opts, 1f-5)
+            Optimisers.adjust!(opts, 1.0f-5)
             @info "optim adjustment"
         elseif i == 21
-            Optimisers.adjust!(opts, 1f-6)
+            Optimisers.adjust!(opts, 1.0f-6)
             @info "optim adjustment"
         elseif i == 41
-            Optimisers.adjust!(opts, 1f-6)
+            Optimisers.adjust!(opts, 1.0f-6)
             @info "optim adjustment"
         end
         @time train_epoch!(m, opts, loss; dtrain=dtrain)
